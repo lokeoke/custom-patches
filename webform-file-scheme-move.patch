@@ -1,0 +1,40 @@
+diff --git a/webform.install b/webform.install
+index 7059f8c..9d3df6d 100644
+--- a/webform.install
++++ b/webform.install
+@@ -869,3 +869,35 @@ function webform_update_7322() {
+ 
+   return t('File components updated to use webform:// scheme.');
+ }
++
++/**
++ * Move webform components files to webform:// scheme.
++ */
++function webform_update_7323() {
++  $result = db_select('webform_component', 'wc', array('fetch' => PDO::FETCH_ASSOC))
++    ->fields('wc')
++    ->condition('type', 'file')
++    ->execute();
++
++  foreach ($result as $component) {
++    $file_components_submissions = db_select('webform_submitted_data', 'wsd', array('fetch' => PDO::FETCH_ASSOC))
++      ->fields('wsd')
++      ->condition('cid', $component['cid'])
++      ->execute();
++
++    $component['extra'] = unserialize($component['extra']);
++
++    $scheme = $component['extra']['scheme'];
++    $directory = $component['extra']['directory'];
++
++    $destination_dir = file_stream_wrapper_uri_normalize($scheme . '://' . $directory);
++
++    foreach ($file_components_submissions as $file_components_submission) {
++      if ((is_numeric($file_components_submission['data'])) && ($file = file_load($file_components_submission['data']))) {
++        file_move($file, $destination_dir, FILE_EXISTS_REPLACE);
++      }
++    }
++  }
++
++  return t('Files moved to webform:// scheme.');
++}
