@@ -1,0 +1,20 @@
+diff --git a/preset_select.js b/preset_select.js
+index 09291f8..2db86d4 100644
+--- a/preset_select.js
++++ b/preset_select.js
+@@ -1,9 +1,15 @@
+ (function ($) {
+   Drupal.behaviors.content_reminder_preset_select = {
+     attach: function (context, settings) {
++      // Save scroll position before focus
++      var x = window.scrollX, y = window.scrollY;
++
+       // the datepicker is attached on the first focus
+       $('.content-reminder-precise-date', context).focus();
+ 
++      // Scroll back
++      window.scrollTo(x, y);
++
+       $('.content-reminder-preset-select', context).change(function () {
+         var timestamp = parseInt($(this).val());
+         if(timestamp) {
