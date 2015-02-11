@@ -1,0 +1,96 @@
+diff --git a/modules/color/color.module b/modules/color/color.module
+index 5b441aa..5cad25b 100644
+--- a/modules/color/color.module
++++ b/modules/color/color.module
+@@ -449,6 +449,12 @@ function color_scheme_form_submit($form, &$form_state) {
+     _color_render_images($theme, $info, $paths, $palette);
+   }
+ 
++
++  // Rewrite sprites with new colors, keeping tha transparency.
++  if (!empty($info['sprites']) && !empty($info['sprites_replace'])) {
++    _color_render_sprites($theme, $info, $paths, $palette);
++  }
++
+   // Rewrite theme stylesheets.
+   $css = array();
+   foreach ($info['css'] as $stylesheet) {
+@@ -523,9 +529,10 @@ function _color_rewrite_stylesheet($theme, &$info, &$paths, $palette, $style) {
+         $chunk = $conversion[$key];
+       }
+       // Not a pre-set color. Extrapolate from the base.
+-      else {
++      // Do nothing with a "Not a pre-set color".
++      /*else {
+         $chunk = _color_shift($palette[$base], $default[$base], $chunk, $info['blend_target']);
+-      }
++      }*/
+     }
+     else {
+       // Determine the most suitable base color for the next color.
+@@ -650,6 +657,65 @@ function _color_render_images($theme, &$info, &$paths, $palette) {
+ }
+ 
+ /**
++ * Renders sprites replacing colors that match a given palette.
++ */
++function _color_render_sprites($theme, &$info, &$paths, $palette) {
++  foreach ($info['sprites'] as $file) {
++    foreach ($info['sprites_replace'] as $key => $pattern) {
++
++      $pattern = _color_unpack($pattern);
++      $replacement = _color_unpack($palette[$key]);
++
++      // Prepare template image.
++      $source = $paths['source'] . '/' . $file;
++
++      $im = imagecreatefrompng($source);
++      $out = imagecreatetruecolor(imagesx($im), imagesy($im));
++
++      imagealphablending($out, FALSE);
++      $transparency = imagecolorallocatealpha($out, 0, 0, 0, 127);
++      imagefill($out, 0, 0, $transparency);
++
++
++      for ($x = 0; $x < imagesx($im); $x++) {
++        for ($y = 0; $y < imagesy($im); $y++) {
++          $pixel = imagecolorat($im, $x, $y);
++
++          $pixel_color = imagecolorsforindex($im, $pixel);
++
++          if ($pixel_color['red'] == $pattern[0] && $pixel_color['green'] == $pattern[1] && $pixel_color['blue'] == $pattern[2]) {
++            $сolor = imagecolorallocatealpha($out, $replacement[0], $replacement[1], $replacement[2], $pixel_color['alpha']);
++
++            imagesetpixel($out, $x, $y, $сolor);
++          }
++          else {
++            imagesetpixel($out, $x, $y, $pixel);
++          }
++        }
++      }
++
++      imagealphablending($out, TRUE);
++      imagesavealpha($out, TRUE);
++
++      $base = drupal_basename($file);
++      $image = drupal_realpath($paths['target'] . $base);
++
++      // Save image.
++      imagepng($out, $image);
++      imagedestroy($out);
++
++      $paths['files'][] = $image;
++
++      // Set standard file permissions for webserver-generated files.
++      drupal_chmod($image);
++
++      // Build before/after map of image paths.
++      $paths['map'][$file] = $base;
++    }
++  }
++}
++
++/**
+  * Shifts a given color, using a reference pair and a target blend color.
+  *
+  * Note: this function is significantly different from the JS version, as it
