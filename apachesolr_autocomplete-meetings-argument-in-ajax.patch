@@ -1,0 +1,14 @@
+diff --git a/jquery-autocomplete/jquery.autocomplete.js b/jquery-autocomplete/jquery.autocomplete.js
+index b2c13d1..4ed56bf 100755
+--- a/jquery-autocomplete/jquery.autocomplete.js
++++ b/jquery-autocomplete/jquery.autocomplete.js
+@@ -364,7 +364,8 @@ $.Autocompleter = function(input, options) {
+ 				url: options.url,
+ 				data: $.extend({
+ 					query: lastWord(term),
+-					limit: options.max
++					limit: options.max,
++          meetings: $('#edit-search-meetings').prop('checked') ? 1 : 0
+ 				}, extraParams),
+ 				success: function(data) {
+ 					var parsed = options.parse && options.parse(data) || parse(data);
