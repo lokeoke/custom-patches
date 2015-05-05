@@ -1,0 +1,161 @@
+diff --git a/components/file.inc b/components/file.inc
+index 561c075..927ab52 100644
+--- a/components/file.inc
++++ b/components/file.inc
+@@ -21,7 +21,7 @@ function _webform_defaults_file() {
+         'addextensions' => '',
+         'size' => '2 MB',
+       ),
+-      'scheme' => 'public',
++      'scheme' => 'webform',
+       'directory' => '',
+       'progress_indicator' => 'throbber',
+       'title_display' => 0,
+@@ -132,7 +132,7 @@ function _webform_edit_file($component) {
+       '#weight' => 3,
+     );
+ 
+-    $scheme_options = array();
++    $scheme_options = webform_get_scheme();
+     foreach (file_get_stream_wrappers(STREAM_WRAPPERS_WRITE_VISIBLE) as $scheme => $stream_wrapper) {
+       $scheme_options[$scheme] = $stream_wrapper['name'];
+     }
+@@ -143,7 +143,6 @@ function _webform_edit_file($component) {
+       '#default_value' => $component['extra']['scheme'],
+       '#description' => t('Private file storage has significantly more overhead than public files, but restricts file access to users who can view submissions.'),
+       '#weight' => 4,
+-      '#access' => count($scheme_options) > 1,
+     );
+     $form['extra']['directory'] = array(
+       '#type' => 'textfield',
+@@ -151,7 +150,6 @@ function _webform_edit_file($component) {
+       '#default_value' => $component['extra']['directory'],
+       '#description' => t('You may optionally specify a sub-directory to store your files.'),
+       '#weight' => 5,
+-      '#field_prefix' => 'webform/',
+     );
+ 
+     $form['display']['progress_indicator'] = array(
+@@ -212,7 +210,7 @@ function _webform_edit_file_check_directory($element) {
+   $scheme = $element['extra']['scheme']['#value'];
+   $directory = $element['extra']['directory']['#value'];
+ 
+-  $destination_dir = file_stream_wrapper_uri_normalize($scheme . '://webform/' . $directory);
++  $destination_dir = file_stream_wrapper_uri_normalize($scheme . '://' . $directory);
+ 
+   // Sanity check input to prevent use parent (../) directories.
+   if (preg_match('/\.\.[\/\\\]/', $destination_dir . '/')) {
+@@ -324,7 +322,7 @@ function _webform_render_file($component, $value = NULL, $filter = TRUE) {
+       'file_validate_extensions' => array(implode(' ', $component['extra']['filtering']['types'])),
+     ),
+     '#pre_render' => array_merge(element_info_property('managed_file', '#pre_render'), array('webform_file_allow_access')),
+-    '#upload_location' => $component['extra']['scheme'] . '://webform/' . $component['extra']['directory'],
++    '#upload_location' => $component['extra']['scheme'] . '://' . $component['extra']['directory'],
+     '#progress_indicator' => $component['extra']['progress_indicator'],
+     '#description' => $filter ? _webform_filter_descriptions($component['extra']['description'], $node) : $component['extra']['description'],
+     '#weight' => $component['weight'],
+diff --git a/webform.install b/webform.install
+index 6c15c77..4c7dcb5 100644
+--- a/webform.install
++++ b/webform.install
+@@ -859,3 +859,47 @@ function webform_update_7321() {
+ function webform_update_7322() {
+   db_add_index('webform_submitted_data', 'data', array(array('data', 64)));
+ }
++
++/**
++ * Upgrade file components to use webform:// scheme.
++ * Move webform components files to webform:// scheme.
++ */
++function webform_update_7323() {
++  $result = db_select('webform_component', 'wc', array('fetch' => PDO::FETCH_ASSOC))
++    ->fields('wc')
++    ->condition('type', 'file')
++    ->execute();
++  foreach ($result as $component) {
++    $component['extra'] = unserialize($component['extra']);
++    $component['extra']['scheme'] = 'webform';
++    $component['extra'] = serialize($component['extra']);
++    drupal_write_record('webform_component', $component, array('nid', 'cid'));
++  }
++
++  $result = db_select('webform_component', 'wc', array('fetch' => PDO::FETCH_ASSOC))
++    ->fields('wc')
++    ->condition('type', 'file')
++    ->execute();
++
++  foreach ($result as $component) {
++    $file_components_submissions = db_select('webform_submitted_data', 'wsd', array('fetch' => PDO::FETCH_ASSOC))
++      ->fields('wsd')
++      ->condition('cid', $component['cid'])
++      ->execute();
++
++    $component['extra'] = unserialize($component['extra']);
++
++    $scheme = $component['extra']['scheme'];
++    $directory = $component['extra']['directory'];
++
++    $destination_dir = file_stream_wrapper_uri_normalize($scheme . '://' . $directory);
++
++    foreach ($file_components_submissions as $file_components_submission) {
++      if ((is_numeric($file_components_submission['data'])) && ($file = file_load($file_components_submission['data']))) {
++        file_move($file, $destination_dir, FILE_EXISTS_REPLACE);
++      }
++    }
++  }
++
++  return t('File components updated to use webform:// scheme. Files moved to webform:// scheme.');
++}
+diff --git a/webform.module b/webform.module
+index 179c18d..c52edf6 100644
+--- a/webform.module
++++ b/webform.module
+@@ -3967,3 +3967,48 @@ function webform_mollom_form_info($form_id) {
+ 
+   return $form_info;
+ }
++
++
++function webform_get_scheme() {
++  return array('webform' => t('Webform'));
++}
++
++/**
++  *  Implements hook_stream_wrappers().
++  */
++function webform_stream_wrappers() {
++  return array(
++    'webform' => array(
++      'name' => t('Webform'),
++      'class' => 'WebformStreamWrapper',
++      'description' => t('Provides webform files path.'),
++      'type' => STREAM_WRAPPERS_LOCAL_HIDDEN,
++    ),
++  );
++}
++
++/**
++  * Webform (webform://) stream wrapper class.
++  *
++  * Provides support for storing webform files with the Drupal file
++  * interface.
++  */
++class WebformStreamWrapper extends DrupalPublicStreamWrapper {
++
++  /**
++   * Implements abstract public function getDirectoryPath()
++   */
++  public function getDirectoryPath() {
++    return parent::getDirectoryPath() . '/webform';
++  }
++
++  /**
++   * Overrides getExternalUrl().
++   *
++   * Return the HTML URI of a public file.
++   */
++  public function getExternalUrl() {
++    $path = str_replace('\\', '/', $this->getTarget());
++    return $GLOBALS['base_url'] . '/' . self::getDirectoryPath() . '/' . drupal_encode_path($path);
++    }
++}
