@@ -55,10 +55,10 @@ index 561c075..927ab52 100644
      '#description' => $filter ? _webform_filter_descriptions($component['extra']['description'], $node) : $component['extra']['description'],
      '#weight' => $component['weight'],
 diff --git a/webform.install b/webform.install
-index 6c15c77..4c7dcb5 100644
+index 6c15c77..2ab7550 100644
 --- a/webform.install
 +++ b/webform.install
-@@ -859,3 +859,47 @@ function webform_update_7321() {
+@@ -859,3 +859,52 @@ function webform_update_7321() {
  function webform_update_7322() {
    db_add_index('webform_submitted_data', 'data', array(array('data', 64)));
  }
@@ -97,10 +97,15 @@ index 6c15c77..4c7dcb5 100644
 +
 +    $destination_dir = file_stream_wrapper_uri_normalize($scheme . '://' . $directory);
 +
-+    foreach ($file_components_submissions as $file_components_submission) {
-+      if ((is_numeric($file_components_submission['data'])) && ($file = file_load($file_components_submission['data']))) {
-+        file_move($file, $destination_dir, FILE_EXISTS_REPLACE);
++    if (file_prepare_directory($destination_dir, FILE_CREATE_DIRECTORY | FILE_MODIFY_PERMISSIONS)) {
++      foreach ($file_components_submissions as $file_components_submission) {
++        if ((is_numeric($file_components_submission['data'])) && ($file = file_load($file_components_submission['data']))) {
++          file_move($file, $destination_dir, FILE_EXISTS_REPLACE);
++        }
 +      }
++    }
++    else {
++      throw new DrupalUpdateException('Webform destination directory doesn\'t exist or not writable.');
 +    }
 +  }
 +
