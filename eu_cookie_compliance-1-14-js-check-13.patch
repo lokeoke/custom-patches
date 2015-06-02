@@ -1,0 +1,168 @@
+diff --git a/eu_cookie_compliance.admin.inc b/eu_cookie_compliance.admin.inc
+index db532ae..55c2999 100755
+--- a/eu_cookie_compliance.admin.inc
++++ b/eu_cookie_compliance.admin.inc
+@@ -48,6 +48,11 @@ function eu_cookie_compliance_admin_form($form_state) {
+       '#title' => t('Only display popup in EU countries (using the <a href="http://drupal.org/project/geoip">geoip</a> module or the <a href="http://drupal.org/project/smart_ip">smart_ip</a> module)'),
+       '#default_value' => isset($popup_settings['eu_only']) ? $popup_settings['eu_only'] : 0,
+     );
++    $form['eu_cookie_compliance_' . $ln]['eu_only_js'] = array(
++      '#type' => 'checkbox',
++      '#title' => t('JavaScript-based: Only display popup in EU countries (using the <a href="http://drupal.org/project/geoip">geoip</a> module)'),
++      '#default_value' => isset($popup_settings['eu_only_js']) ? $popup_settings['eu_only_js'] : 0,
++    );
+   }
+ 
+   $form['eu_cookie_compliance_' . $ln]['popup_position'] = array(
+diff --git a/eu_cookie_compliance.module b/eu_cookie_compliance.module
+index 5bcb200..35bd6b3 100755
+--- a/eu_cookie_compliance.module
++++ b/eu_cookie_compliance.module
+@@ -19,6 +19,18 @@ function eu_cookie_compliance_menu() {
+     'access arguments' => array('administer EU Cookie Compliance popup'),
+     'file' => 'eu_cookie_compliance.admin.inc',
+   );
++  $items['eu-cookie-compliance-domain'] = array(
++    'title' => 'Return cookie domain',
++    'page callback' => 'eu_cookie_compliance_domain_json',
++    'access arguments' => array('display EU Cookie Compliance popup'),
++  );
++  if (module_exists('geoip')) {
++    $items['eu-cookie-compliance-check'] = array(
++      'title' => 'Check if visit is in EU',
++      'page callback' => 'eu_cookie_compliance_json',
++      'access arguments' => array('display EU Cookie Compliance popup'),
++    );
++  }
+   return $items;
+ }
+ 
+@@ -116,7 +128,7 @@ function eu_cookie_compliance_page_build(&$page) {
+         'popup_link_new_window' => isset($popup_settings['popup_link_new_window']) ? $popup_settings['popup_link_new_window'] : 1,
+         'popup_position' => empty($popup_settings['popup_position']) ? NULL : $popup_settings['popup_position'],
+         'popup_language' => $language->language,
+-        'domain' => variable_get('eu_cookie_compliance_domain', ''),
++        'popup_eu_only_js' => isset($popup_settings['eu_only_js']) ? $popup_settings['eu_only_js'] : 0,
+       );
+       cache_set('eu_cookie_compliance_client_settings_' . $language->language, $data, 'cache', CACHE_TEMPORARY);
+      }
+@@ -183,3 +195,56 @@ function eu_cookie_compliance_get_settings($setting = 'all') {
+     return NULL;
+   }
+ }
++
++/**
++ * Menu callback for return JSON Domain of cookie.
++ */
++function eu_cookie_compliance_domain_json() {
++  $data = array(
++    'domain' => variable_get('eu_cookie_compliance_domain', ''),
++  );
++  drupal_add_http_header('Cache-Control', 'private');
++  drupal_json_output($data);
++  drupal_exit();
++}
++
++/**
++ * Menu callback for return JSON EU visitor status.
++ */
++function eu_cookie_compliance_json() {
++  $data = eu_cookie_compliance_user_in_eu();
++  drupal_add_http_header('Cache-Control', 'private');
++  drupal_json_output($data);
++  drupal_exit();
++}
++
++/**
++ * Check if the user is in the EU.
++ */
++function eu_cookie_compliance_user_in_eu() {
++  $geoip_match = TRUE;
++  $user_country = '';
++
++  if (module_exists('geoip')) {
++    $geoip_match = FALSE;
++    $eu_countries_default = array(
++      'BE', 'BG', 'CZ', 'DK', 'DE', 'EE', 'IE', 'EL', 'ES', 'FR', 'HR', 'IT',
++      'CY', 'LV', 'LT', 'LU', 'HU', 'MT', 'NL', 'AT', 'PL', 'PT', 'RO', 'SI',
++      'SK', 'FI', 'SE', 'UK', 'GB',
++    );
++
++    // Allow custom array of countries to be loaded from settings.php, defaulting
++    // to the array above.
++    $eu_countries = variable_get('eu_cookie_compliance_eu_coutries', $eu_countries_default);
++
++    $user_country = geoip_country_code();
++    if (in_array($user_country, $eu_countries)) {
++      $geoip_match = TRUE;
++    }
++  }
++
++  return array(
++    'country' => $user_country,
++    'in_eu' => $geoip_match,
++  );
++}
+\ No newline at end of file
+diff --git a/js/eu_cookie_compliance.js b/js/eu_cookie_compliance.js
+index a60148a..67e5d8a 100755
+--- a/js/eu_cookie_compliance.js
++++ b/js/eu_cookie_compliance.js
+@@ -1,6 +1,38 @@
+ (function ($) {
+   Drupal.behaviors.eu_cookie_compliance_popup = {
+     attach: function(context, settings) {
++      // Get domain of cookie with JSON callback.
++      var urlDomain = Drupal.settings.basePath + 'eu-cookie-compliance-domain';
++      $.getJSON(urlDomain, function(data) {
++        settings.eu_cookie_compliance.domain = data.domain;
++      });
++
++      // If configured, check JSON callback to determine if in EU.
++      if (Drupal.settings.eu_cookie_compliance.popup_eu_only_js) {
++        if (!Drupal.eu_cookie_compliance.hasAgreed()) {
++          var url = Drupal.settings.basePath + 'eu-cookie-compliance-check';
++          $.getJSON(url, function(data) {
++            // If in the EU, show the compliance popup.
++            if (data.in_eu) {
++              Drupal.eu_cookie_compliance.execute();
++            }
++            // If not in EU, set an agreed cookie automatically.
++            else {
++              Drupal.eu_cookie_compliance.setStatus(2);
++            }
++          });
++        }
++      }
++      // Otherwise, fallback to standard behavior which is to render the popup.
++      else {
++        Drupal.eu_cookie_compliance.execute();
++      }
++    }
++  };
++
++  Drupal.eu_cookie_compliance = {};
++
++  Drupal.eu_cookie_compliance.execute = function() {
+       $('body').not('.sliding-popup-processed').addClass('sliding-popup-processed').each(function() {
+         try {
+           var enabled = Drupal.settings.eu_cookie_compliance.popup_enabled;
+@@ -51,10 +83,7 @@
+           return;
+         }
+       });
+-    }
+-  }
+-
+-  Drupal.eu_cookie_compliance = {};
++    };
+ 
+   Drupal.eu_cookie_compliance.createPopup = function(html) {
+     var popup = $(html)
+@@ -190,4 +219,4 @@
+     return (cookieEnabled);
+   }
+   
+-})(jQuery);
+\ No newline at end of file
++})(jQuery);
