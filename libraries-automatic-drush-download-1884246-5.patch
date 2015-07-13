@@ -1,0 +1,411 @@
+diff --git a/libraries.drush.inc b/libraries.drush.inc
+index 482d501..3ec3523 100644
+--- a/libraries.drush.inc
++++ b/libraries.drush.inc
+@@ -9,34 +9,29 @@
+  * Implements hook_drush_command().
+  */
+ function libraries_drush_command() {
+-  $items['libraries-list'] = array(
+-    'callback' => 'libraries_drush_list',
++  $commands = array();
++
++  $commands['libraries-list'] = array(
+     'description' => dt('Lists registered library information.'),
+     'bootstrap' => DRUSH_BOOTSTRAP_DRUPAL_FULL,
++    'aliases' => array('ll'),
+   );
+-  /**$items['libraries-download'] = array(
+-    'callback' => 'libraries_drush_download',
+-    'description' => dt('Downloads a registered library into the libraries directory for the active site.'),
+-    'arguments' => array(
+-      'name' => dt('The internal name of the registered library.'),
+-    ),
+-  );*/
+-  return $items;
+-}
+ 
+-/**
+- * Implements hook_drush_help().
+- */
+-function libraries_drush_help($section) {
+-  switch ($section) {
+-    case 'drush:libraries-list':
+-      return dt('Lists registered library information.');
+-
+-    case 'drush:libraries-download':
+-      return dt('Downloads a registered library into the libraries directory for the active site.
++  $commands['libraries-download'] = array(
++    'description' => dt('Download all non-existent libraries from "hook_libraries_info()". You able to specify necessary libraries separating their names by spaces or download all non-existent libraries.'),
++    'bootstrap' => DRUSH_BOOTSTRAP_DRUPAL_FULL,
++    'aliases' => array('ld'),
++    'options' => array(
++      'profile' => dt('Specify this empty option if you want to download libraries into profile installation folder.'),
++    ),
++    'examples' => array(
++      'drush ld' => dt('Download all defined and not downloaded libraries to "sites/all/libraries".'),
++      'drush ld --profile' => dt('Download all defined libraries into "!dir".', array('!dir' => 'profiles/<PROFILE>/libraries')),
++      'drush ld twitteroauth parsedown' => dt('Download the "Twitter OAuth" and "Parsedown" libraries to "sites/all/libraries".'),
++    ),
++  );
+ 
+-See libraries-list for a list of registered libraries.');
+-  }
++  return $commands;
+ }
+ 
+ /**
+@@ -44,7 +39,7 @@ See libraries-list for a list of registered libraries.');
+  *
+  * @see drush_cache_clear_types()
+  */
+-function libraries_drush_cache_clear(&$types) {
++function libraries_drush_cache_clear(array &$types) {
+   $types['libraries'] = 'libraries_drush_invalidate_cache';
+ }
+ 
+@@ -59,112 +54,161 @@ function libraries_drush_invalidate_cache() {
+ }
+ 
+ /**
+- * Lists registered library information.
++ * Implements drush_COMMAND().
+  */
+-function libraries_drush_list() {
++function drush_libraries_list() {
+   $libraries = array();
++
+   foreach (libraries_info() as $name => $info) {
+     $libraries[$name] = libraries_detect($name);
+   }
++
+   ksort($libraries);
+ 
+   if (empty($libraries)) {
+     drush_print('There are no registered libraries.');
+   }
+-
+   else {
+     $rows = array();
+     // drush_print_table() automatically treats the first row as the header, if
+     // $header is TRUE.
+-    $rows[] = array(dt('Name'), dt('Status'), dt('Version'), dt('Variants'), dt('Dependencies'));
+-    foreach ($libraries as $name => $library) {
+-      $status = ($library['installed'] ? dt('OK') : drupal_ucfirst($library['error']));
+-      $version = (($library['installed'] && !empty($library['version'])) ? $library['version'] : '-');
++    $rows[] = array(
++      dt('Name'),
++      dt('Status'),
++      dt('Version'),
++      dt('Variants'),
++      dt('Dependencies'),
++    );
+ 
++    foreach ($libraries as $name => $library) {
+       // Only list installed variants.
+       $variants = array();
++
+       foreach ($library['variants'] as $variant_name => $variant) {
+-        if ($variant['installed']) {
++        if (!empty($variant['installed'])) {
+           $variants[] = $variant_name;
+         }
+       }
+-      $variants = (empty($variants) ? '-' : implode(', ', $variants));
+ 
+-      $dependencies = (!empty($library['dependencies']) ? implode(', ', $library['dependencies']) : '-');
+-
+-      $rows[] = array($name, $status, $version, $variants, $dependencies);
++      $rows[] = array(
++        $name,
++        $library['installed'] ? dt('OK') : drupal_ucfirst($library['error']),
++        $library['installed'] || empty($library['version']) ? '-' : $library['version'],
++        empty($variants) ? '-' : implode(', ', $variants),
++        empty($library['dependencies']) ? '-' : implode(', ', $library['dependencies']),
++      );
+     }
++
+     // Make the possible values for the 'Status' column and the 'Version' header
+     // wrap nicely.
+-    $widths = array(0, 12, 7, 0, 0);
+-    drush_print_table($rows, TRUE, $widths);
++    drush_print_table($rows, TRUE, array(0, 12, 7, 0, 0));
+   }
+ }
+ 
+ /**
+- * Downloads a library.
+- *
+- * @param $name
+- *   The internal name of the library to download.
++ * Implements drush_COMMAND().
+  */
+-function libraries_drush_download($name) {
+-  return;
+-
+-  // @todo Looks wonky?
+-  if (!drush_shell_exec('type unzip')) {
+-    return drush_set_error(dt('Missing dependency: unzip. Install it before using this command.'));
++function drush_libraries_download() {
++  $info = libraries_info();
++  // Remove the command name from arguments.
++  $arguments = array_slice(drush_get_arguments(), 1);
++  $download_all = empty($arguments);
++
++  // Allow to download libraries specified by user.
++  if (!$download_all) {
++    foreach ($info as $name => $library) {
++      // If library name is not contained in the arguments array then
++      // remove item from list for downloading.
++      if (!in_array($name, $arguments)) {
++        unset($info[$name]);
++      }
++    }
+   }
+ 
+-  // @todo Simply use current drush site.
+-  $args = func_get_args();
+-  if ($args[0]) {
+-    $path = $args[0];
++  if (empty($info) && !$download_all) {
++    drush_log(dt('You are not specified any existing library, defined by "hook_libraries_info()".'), 'error');
+   }
+   else {
+-    $path = 'sites/all/libraries';
+-  }
+-
+-  // Create the path if it does not exist.
+-  if (!is_dir($path)) {
+-    drush_op('mkdir', $path);
+-    drush_log(dt('Directory @path was created', array('@path' => $path)), 'notice');
+-  }
+-
+-  // Set the directory to the download location.
+-  $olddir = getcwd();
+-  chdir($path);
+-
+-  $filename = basename(COLORBOX_DOWNLOAD_URI);
+-  $dirname = basename(COLORBOX_DOWNLOAD_URI, '.zip');
+-
+-  // Remove any existing Colorbox plugin directory
+-  if (is_dir($dirname)) {
+-    drush_log(dt('A existing Colorbox plugin was overwritten at @path', array('@path' => $path)), 'notice');
+-  }
+-  // Remove any existing Colorbox plugin zip archive
+-  if (is_file($filename)) {
+-    drush_op('unlink', $filename);
+-  }
++    $path = drush_get_option('profile') ? drupal_get_path('profile', drupal_get_profile()) : 'sites/all';
++    $libraries = libraries_get_libraries();
++    $downloaded = _drush_libraries_download($path, $libraries, $info);
++
++    if (!empty($downloaded) && drush_confirm(dt('The next libraries were already downloaded: "!libs". Do you want re-download them? Old data will be erased!', array('!libs' => implode('", "', $downloaded))))) {
++      // Reset an array with items for downloading.
++      $download = array();
++
++      // Set affirmative context to "TRUE", because a user gave his consent
++      // for re-downloading.
++      drush_set_context('DRUSH_AFFIRMATIVE', TRUE);
++
++      foreach ($downloaded as $machine_name => $name) {
++        if (drush_delete_dir($libraries[$machine_name], TRUE)) {
++          // Allow to re-download successfully deleted libraries only.
++          $download[$machine_name] = $info[$machine_name];
++        }
++        else {
++          drush_log(dt('Cannot remove the "!dir" directory.', array('!dir' => $libraries[$machine_name])), 'error');
++        }
++      }
+ 
+-  // Download the zip archive
+-  if (!drush_shell_exec('wget '. COLORBOX_DOWNLOAD_URI)) {
+-    drush_shell_exec('curl -O '. COLORBOX_DOWNLOAD_URI);
++      if (!empty($download)) {
++        _drush_libraries_download($path, array(), $download);
++      }
++    }
+   }
++}
+ 
+-  if (is_file($filename)) {
+-    // Decompress the zip archive
+-    drush_shell_exec('unzip -qq -o '. $filename);
+-    // Remove the zip archive
+-    drush_op('unlink', $filename);
++/**
++ * Download libraries.
++ *
++ * @internal
++ *
++ * @param string $path
++ *   Relative path to "libraries" folder (sites/all or profiles/<PROFILE>).
++ * @param array $existing
++ *   An empty or returned by {@link libraries_get_libraries()} array.
++ * @param array $download
++ *   Structured array from {@link libraries_info()} function.
++ *
++ * @return array
++ *   An empty array if nothing has been downloaded or filled by names of
++ *   downloaded libraries.
++ */
++function _drush_libraries_download($path, array $existing, array $download) {
++  $downloaded = array();
++  $path = sprintf('%s/%s/libraries', DRUPAL_ROOT, $path);
++
++  foreach ($download as $name => $library) {
++    $archive = $path . '/' . basename($library['download url']);
++
++    if (empty($existing[$name])) {
++      // Keep going, if library does not exist and user allows to download it.
++      if (drush_confirm(dt('Are you want download the "!lib" library?', array('!lib' => $library['name'])))) {
++        // Download an archive into "*/libraries" folder.
++        if (!empty($library['download url']) && _drush_download_file($library['download url'], $archive)) {
++          // Extract data into "*/libraries/LIBRARY-tmp" directory and get
++          // the listing of the whole structure of an archive.
++          $listing = drush_tarball_extract($archive, "$path/$name-tmp", TRUE);
++
++          // Move the downloaded data into a "*/libraries/LIBRARY" directory.
++          if (!empty($listing) && drush_move_dir("$path/$name-tmp/" . reset($listing), "$path/$name")) {
++            drush_log(dt('The library was downloaded to "!dir".', array('!dir' => "$path/$name")), 'success');
++          }
++          else {
++            drush_log(dt('Library could not be moved from temporary folder.'), 'error');
++          }
++
++          array_map('drush_delete_dir', array($archive, "$path/$name-tmp"));
++        }
++        else {
++          drush_log(dt('To download a library, the "download url" parameter shall point to an archive file.'), 'error');
++        }
++      }
++    }
++    else {
++      $downloaded[$name] = $library['name'];
++    }
+   }
+ 
+-  // Set working directory back to the previous working directory.
+-  chdir($olddir);
+-
+-  if (is_dir($path .'/'. $dirname)) {
+-    drush_log(dt('Colorbox plugin has been downloaded to @path', array('@path' => $path)), 'success');
+-  }
+-  else {
+-    drush_log(dt('Drush was unable to download the Colorbox plugin to @path', array('@path' => $path)), 'error');
+-  }
++  return $downloaded;
+ }
+diff --git a/libraries.info b/libraries.info
+index 439cb3c..a250232 100644
+--- a/libraries.info
++++ b/libraries.info
+@@ -4,3 +4,4 @@ core = 7.x
+ ; We use hook_system_theme_info() which was added in Drupal 7.11
+ dependencies[] = system (>=7.11)
+ files[] = tests/libraries.test
++files[] = tests/libraries.drush.test
+diff --git a/tests/libraries.drush.test b/tests/libraries.drush.test
+new file mode 100644
+index 0000000..2df46c0
+--- /dev/null
++++ b/tests/libraries.drush.test
+@@ -0,0 +1,57 @@
++<?php
++
++/**
++ * @file
++ * Tests for Libraries Drush Download.
++ */
++
++class LibrariesDrushTestCase extends DrupalWebTestCase {
++
++  public static function getInfo() {
++    return array(
++      'name' => 'Libraries Drush',
++      'description' => 'Tests downloading of libraries with Drush.',
++      'group' => 'Libraries API',
++    );
++  }
++
++  function setUp() {
++    parent::setUp('libraries', 'libraries_test_module');
++    theme_enable(array('libraries_test_theme'));
++    $this->profile = drupal_get_profile();
++  }
++
++  /**
++   * Tests drush_libraries_download().
++   */
++  function testDrushLibrariesDownload() {
++    shell_exec('drush ld example_download_fail -y');
++    $library = libraries_load('example_download_fail');
++    $this->assertFalse($library['loaded'], 'Library with incorrect download url cannot be loaded');
++
++    shell_exec('drush ld example_download -y');
++    $library = libraries_load('example_download');
++
++    $this->assertEqual($library['loaded'], 1, 'Library is downloaded and loaded');
++    $this->assertEqual($library['library path'], 'sites/all/libraries/example_download', 'Library is downloaded to correct place');
++
++    $path = drupal_realpath($library['library path']);
++    foreach ($library['files'] as $file_type) {
++      foreach ($file_type as $file_name => $file) {
++        $this->assertTrue(file_exists($path . '/' . $file_name));
++      }
++    }
++  }
++
++  function testDrushLibrariesDownloadProfile() {
++    shell_exec('drush ld example_download_fail --profile -y');
++    $library = libraries_load('example_download_fail');
++    $this->assertFalse($library['loaded'], 'Library with incorrect download url cannot be loaded');
++
++    shell_exec('drush ld example_download_profile --profile -y');
++    $library = libraries_load('example_download_profile');
++
++    $this->assertEqual($library['loaded'], 1, 'Library is downloaded and loaded');
++    $this->assertEqual('profiles/' . $this->profile . '/libraries/example_download_profile', $library['library path'], 'Library is downloaded to correct place');
++  }
++}
+\ No newline at end of file
+diff --git a/tests/modules/libraries_test_module/libraries_test_module.module b/tests/modules/libraries_test_module/libraries_test_module.module
+index 65f412e..edeaa6e 100644
+--- a/tests/modules/libraries_test_module/libraries_test_module.module
++++ b/tests/modules/libraries_test_module/libraries_test_module.module
+@@ -319,6 +319,36 @@ function libraries_test_module_libraries_info() {
+     ),
+   );
+ 
++  $libraries['example_download'] = array(
++    'name' => 'example_download',
++    'vendor url' => 'http://parsedown.org/',
++    'download url' => 'https://github.com/BR0kEN-/parsedown/archive/master.zip',
++    'version arguments' => array(
++      'file' => 'Parsedown.php',
++      'lines' => 25,
++      'pattern' => "/const version = '(\d\.\d\.\d)'/i",
++    ),
++    'files' => array(
++      'php' => array(
++        'Parsedown.php',
++      ),
++    ),
++  );
++
++  $libraries['example_download_profile'] = array(
++    'name' => 'example_download_profile',
++    'version' => '0.5.1',
++    'vendor url' => 'https://github.com/mustangostang/spyc',
++    'download url' => 'https://github.com/mustangostang/spyc/archive/master.zip',
++    'version arguments' => array(
++      'file' => 'Spyc.php',
++      'pattern' => '@version\s+([0-9a-zA-Z\.-]+)@',
++    ),
++    'files' => array(
++      'php' => array('Spyc.php'),
++    ),
++  );
++
+   return $libraries;
+ }
+ 
