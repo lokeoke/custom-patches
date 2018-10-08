@@ -1,5 +1,5 @@
 diff --git a/src/Plugin/QueueWorker/WorkspaceReplication.php b/src/Plugin/QueueWorker/WorkspaceReplication.php
-index 92e5147..f768449 100644
+index 92e5147..44e9b63 100644
 --- a/src/Plugin/QueueWorker/WorkspaceReplication.php
 +++ b/src/Plugin/QueueWorker/WorkspaceReplication.php
 @@ -3,6 +3,7 @@
@@ -59,7 +59,7 @@ index 92e5147..f768449 100644
    /**
     * {@inheritdoc}
     */
-@@ -55,51 +72,65 @@ class WorkspaceReplication extends QueueWorkerBase implements ContainerFactoryPl
+@@ -55,51 +72,66 @@ class WorkspaceReplication extends QueueWorkerBase implements ContainerFactoryPl
        $container->get('workspace.replicator_manager'),
        $container->get('datetime.time'),
        $container->get('account_switcher'),
@@ -108,6 +108,7 @@ index 92e5147..f768449 100644
 -    if (($response instanceof ReplicationLogInterface) && ($response->get('ok')->value == TRUE)) {
 -      $replication->setReplicationStatusReplicated();
 -      $replication->set('replicated', $this->time->getRequestTime());
++    $this->logger->info('Replication status is "@replication_status".', ['@replication_status' => $replication->get('replication_status')]);
 +    if ($replication->get('replication_status') == Replication::QUEUED) {
 +      $account = User::load(1);
 +      $this->accountSwitcher->switchTo($account);
